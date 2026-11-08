@@ -1,0 +1,14 @@
+
+{
+  "name": "pdf-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A browser-based PDF splitter and page editor.",
+  "scripts": {
+    "start": "http-server . -p 8000 -c-1",
+    "dev": "npm start"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}
