@@ -2,134 +2,470 @@
 import {
     elements,
     displayFileInfo,
-    updateStatus,
-    setButtonDisabled
+    setTabsEnabled,
+    setActiveMode,
+    renderSplitPagePreviews,
+    renderEditPagePreviews,
+    updatePageThumbnail,
+    setActionButtonsDisabled,
+    setPageControlsDisabled,
+    updateResetButton,
+    setStatus,
+    clearWorkspace
 } from './dom.js';
 
+import {
+    loadPdfFile,
+    renderPageThumbnail,
+    createSplitZip,
+    createReorderedPdf
+} from './pdf-service.js';
+
+// Application state
 let selectedFile = null;
+let sourcePdf = null;
+let previewDocument = null;
 
-// Check external libraries
-console.log('[INIT] PDFLib:', typeof PDFLib);
-console.log('[INIT] JSZip:', typeof JSZip);
+// Original pages never change.
+// editablePages stores the user's working order.
+let originalPages = [];
+let editablePages = [];
 
-// Handle PDF upload
-elements.pdfInput.addEventListener('change', () => {
-    console.log('[UPLOAD] File input changed');
+let uploadRequestId = 0;
+let previewsReady = false;
+let isBusy = false;
+let activeMode = 'split';
 
-    const file = elements.pdfInput.files[0];
+// Initial UI state
+clearWorkspace();
 
-    if (!file) {
-        console.log('[UPLOAD] No file selected');
-        return;
+setStatus('Upload a PDF to get started.');
+
+// ========================================
+// PDF UPLOAD AND PREVIEW
+// ========================================
+
+elements.pdfInput.addEventListener('change', handlePdfUpload);
+
+async function handlePdfUpload() {
+    const file = elements.pdfInput.files?.[0];
+
+    // Allow uploading the same file again later.
+    elements.pdfInput.value = '';
+
+    if (!file) return;
+
+    const requestId = ++uploadRequestId;
+
+    // Destroy previous PDF.js document.
+    if (previewDocument) {
+        previewDocument.destroy().catch(() => {});
     }
 
-    console.log('[UPLOAD] Selected file:', file.name);
-    console.log('[UPLOAD] File type:', file.type);
-    console.log('[UPLOAD] File size:', file.size);
+    // Reset previous application state.
+    selectedFile = null;
+    sourcePdf = null;
+    previewDocument = null;
 
-    // Validate file
-    if (
-        file.type !== 'application/pdf' &&
-        !file.name.toLowerCase().endsWith('.pdf')
-    ) {
-        alert('Please select a valid PDF file.');
-        elements.pdfInput.value = '';
+    originalPages = [];
+    editablePages = [];
+
+    previewsReady = false;
+    isBusy = false;
+
+    clearWorkspace();
+
+    setStatus('Loading PDF...');
+
+    const isPdf =
+        file.type === 'application/pdf' ||
+        file.name.toLowerCase().endsWith('.pdf');
+
+    if (!isPdf) {
+        setStatus('Please select a PDF file.', 'error');
         return;
     }
-
-    selectedFile = file;
-
-    displayFileInfo(file);
-    setButtonDisabled(false);
-    updateStatus('PDF uploaded successfully!');
-
-    console.log('[UPLOAD] Upload completed successfully');
-});
-
-// Handle PDF splitting
-elements.splitBtn.addEventListener('click', async () => {
-    if (!selectedFile) {
-        updateStatus('Please upload a PDF first.');
-        return;
-    }
-
-    setButtonDisabled(true);
-    updateStatus('Processing PDF...');
 
     try {
-        // Verify libraries
-        if (typeof PDFLib === 'undefined') {
-            throw new Error('PDFLib failed to load.');
+        // Load PDF using pdf-lib and PDF.js
+        const loaded = await loadPdfFile(file);
+
+        // Ignore outdated upload operations.
+        if (requestId !== uploadRequestId) {
+            loaded.previewDocument.destroy().catch(() => {});
+            return;
         }
 
-        if (typeof JSZip === 'undefined') {
-            throw new Error('JSZip failed to load.');
+        if (loaded.pageCount < 1) {
+            throw new Error('This PDF does not contain any pages.');
         }
 
-        const { PDFDocument } = PDFLib;
+        selectedFile = file;
+        sourcePdf = loaded.sourcePdf;
+        previewDocument = loaded.previewDocument;
 
-        console.log('[SPLIT] Reading PDF...');
-
-        const buffer = await selectedFile.arrayBuffer();
-
-        const sourcePdf = await PDFDocument.load(buffer);
-
-        const totalPages = sourcePdf.getPageCount();
-
-        console.log(`[SPLIT] Total pages: ${totalPages}`);
-
-        const zip = new JSZip();
-
-        // Split individual pages
-        for (let i = 0; i < totalPages; i++) {
-            updateStatus(
-                `Processing page ${i + 1} of ${totalPages}...`
-            );
-
-            console.log(`[SPLIT] Processing page ${i + 1}`);
-
-            const newPdf = await PDFDocument.create();
-
-            const [page] = await newPdf.copyPages(
-                sourcePdf,
-                [i]
-            );
-
-            newPdf.addPage(page);
-
-            const pdfBytes = await newPdf.save();
-
-            zip.file(`page-${i + 1}.pdf`, pdfBytes);
-        }
-
-        // Generate ZIP
-        updateStatus('Generating ZIP file...');
-
-        const zipBlob = await zip.generateAsync({
-            type: 'blob'
-        });
-
-        // Download ZIP
-        downloadFile(zipBlob, 'split-pdfs.zip');
-
-        updateStatus(
-            `Success! ${totalPages} PDF files generated.`
+        // Initialise original page collection.
+        originalPages = Array.from(
+            { length: loaded.pageCount },
+            (_, index) => ({
+                originalIndex: index,
+                thumbnail: null
+            })
         );
 
-        console.log('[SPLIT] Completed successfully');
+        // Create a separate editable collection.
+        editablePages = originalPages.map(page => ({
+            ...page
+        }));
+
+        // Update UI
+        displayFileInfo(file, loaded.pageCount);
+
+        setTabsEnabled(true);
+
+        activeMode = 'split';
+        setActiveMode(activeMode);
+
+        renderSplitPagePreviews(originalPages);
+
+        renderEditPagePreviews(editablePages, {
+            onMove: movePage,
+            onDelete: deletePage
+        });
+
+        setActionButtonsDisabled(true);
+
+        setStatus(
+            `Generating page previews: 0 / ${loaded.pageCount}...`
+        );
+
+        // Render thumbnails sequentially.
+        // This avoids creating too many canvases simultaneously.
+        for (let index = 0; index < loaded.pageCount; index++) {
+
+            if (requestId !== uploadRequestId) return;
+
+            try {
+                const thumbnail = await renderPageThumbnail(
+                    previewDocument,
+                    index + 1
+                );
+
+                if (requestId !== uploadRequestId) return;
+
+                originalPages[index].thumbnail = thumbnail;
+                editablePages[index].thumbnail = thumbnail;
+
+                updatePageThumbnail(index, thumbnail);
+
+            } catch (previewError) {
+                console.warn(
+                    `[PREVIEW] Could not render page ${index + 1}:`,
+                    previewError
+                );
+            }
+
+            setStatus(
+                `Generating page previews: ${index + 1} / ${loaded.pageCount}...`
+            );
+        }
+
+        if (requestId !== uploadRequestId) return;
+
+        previewsReady = true;
+
+        setActionButtonsDisabled(false);
+        updateResetButton(false);
+
+        setStatus(
+            `Ready. ${loaded.pageCount} page previews loaded.`,
+            'success'
+        );
+
+        console.log('[UPLOAD] PDF loaded:', file.name);
+        console.log('[UPLOAD] Total pages:', loaded.pageCount);
 
     } catch (error) {
-        console.error('[SPLIT] Error:', error);
 
-        updateStatus(`Error: ${error.message}`);
+        if (requestId !== uploadRequestId) return;
+
+        console.error('[UPLOAD] Failed to load PDF:', error);
+
+        selectedFile = null;
+        sourcePdf = null;
+        previewDocument = null;
+
+        originalPages = [];
+        editablePages = [];
+
+        previewsReady = false;
+
+        clearWorkspace();
+
+        setStatus(
+            `Could not open PDF: ${error.message}`,
+            'error'
+        );
+    }
+}
+
+// ========================================
+// MODE TAB SWITCHING
+// ========================================
+
+elements.splitTab.addEventListener('click', () => {
+    if (!sourcePdf) return;
+
+    activeMode = 'split';
+
+    setActiveMode(activeMode);
+});
+
+elements.editTab.addEventListener('click', () => {
+    if (!sourcePdf) return;
+
+    activeMode = 'edit';
+
+    setActiveMode(activeMode);
+});
+
+// ========================================
+// MODE 1: SPLIT PDF
+// ========================================
+
+elements.splitBtn.addEventListener('click', async () => {
+
+    if (
+        !sourcePdf ||
+        !selectedFile ||
+        !previewsReady ||
+        isBusy
+    ) {
+        return;
+    }
+
+    isBusy = true;
+
+    elements.pdfInput.disabled = true;
+
+    setActionButtonsDisabled(true);
+    setPageControlsDisabled(true);
+
+    setStatus('Preparing separate PDF files...');
+
+    try {
+
+        // Every original page becomes one individual PDF.
+        const zipBlob = await createSplitZip(
+            sourcePdf,
+            (current, total) => {
+                setStatus(`Splitting page ${current} of ${total}...`);
+            }
+        );
+
+        const baseName = getBaseFilename(selectedFile.name);
+
+        downloadBlob(
+            zipBlob,
+            `${baseName}-split-pages.zip`
+        );
+
+        setStatus(
+            `Done! ${originalPages.length} individual PDFs were added to the ZIP file.`,
+            'success'
+        );
+
+    } catch (error) {
+
+        console.error('[SPLIT] Failed:', error);
+
+        setStatus(
+            `Could not split PDF: ${error.message}`,
+            'error'
+        );
 
     } finally {
-        setButtonDisabled(false);
+
+        isBusy = false;
+
+        elements.pdfInput.disabled = false;
+
+        setActionButtonsDisabled(!previewsReady);
+        setPageControlsDisabled(false);
     }
 });
 
-// Download generated file
-function downloadFile(blob, filename) {
+// ========================================
+// MODE 2: REORDER AND DELETE
+// ========================================
+
+// Move page up or down.
+function movePage(position, direction) {
+
+    if (isBusy || !previewsReady) return;
+
+    const targetPosition = position + direction;
+
+    // Prevent moving outside the page list.
+    if (
+        targetPosition < 0 ||
+        targetPosition >= editablePages.length
+    ) {
+        return;
+    }
+
+    // Remove page from its current position.
+    const [movedPage] = editablePages.splice(position, 1);
+
+    // Insert page at the new position.
+    editablePages.splice(targetPosition, 0, movedPage);
+
+    // Refresh UI.
+    renderEditPagePreviews(editablePages, {
+        onMove: movePage,
+        onDelete: deletePage
+    });
+
+    updateResetButton(false);
+
+    setStatus(
+        `Moved original page ${movedPage.originalIndex + 1} to position ${targetPosition + 1}.`
+    );
+}
+
+// Delete a selected page.
+function deletePage(position) {
+
+    if (isBusy || !previewsReady) return;
+
+    // Always retain at least one page.
+    if (editablePages.length <= 1) {
+        setStatus(
+            'A PDF must contain at least one page.',
+            'error'
+        );
+        return;
+    }
+
+    const [removedPage] = editablePages.splice(position, 1);
+
+    // Refresh UI.
+    renderEditPagePreviews(editablePages, {
+        onMove: movePage,
+        onDelete: deletePage
+    });
+
+    updateResetButton(false);
+
+    setStatus(
+        `Removed original page ${removedPage.originalIndex + 1}. ${editablePages.length} pages remain.`
+    );
+}
+
+// Reset page order and restore deleted pages.
+elements.resetBtn.addEventListener('click', () => {
+
+    if (isBusy || !previewsReady) return;
+
+    editablePages = originalPages.map(page => ({
+        ...page
+    }));
+
+    renderEditPagePreviews(editablePages, {
+        onMove: movePage,
+        onDelete: deletePage
+    });
+
+    updateResetButton(true);
+
+    setStatus(
+        'Page order and deleted pages have been reset.'
+    );
+});
+
+// ========================================
+// DOWNLOAD REVISED PDF
+// ========================================
+
+elements.downloadEditedBtn.addEventListener('click', async () => {
+
+    if (
+        !sourcePdf ||
+        !selectedFile ||
+        !previewsReady ||
+        isBusy
+    ) {
+        return;
+    }
+
+    isBusy = true;
+
+    elements.pdfInput.disabled = true;
+
+    setActionButtonsDisabled(true);
+    setPageControlsDisabled(true);
+
+    setStatus('Generating revised PDF...');
+
+    try {
+
+        // Snapshot the selected page order.
+        const pageIndexes = editablePages.map(
+            page => page.originalIndex
+        );
+
+        const pdfBytes = await createReorderedPdf(
+            sourcePdf,
+            pageIndexes
+        );
+
+        const blob = new Blob(
+            [pdfBytes],
+            { type: 'application/pdf' }
+        );
+
+        const baseName = getBaseFilename(selectedFile.name);
+
+        downloadBlob(
+            blob,
+            `${baseName}-revised.pdf`
+        );
+
+        setStatus(
+            `Done! Revised PDF downloaded with ${pageIndexes.length} pages.`,
+            'success'
+        );
+
+    } catch (error) {
+
+        console.error('[EDIT] Failed:', error);
+
+        setStatus(
+            `Could not generate revised PDF: ${error.message}`,
+            'error'
+        );
+
+    } finally {
+
+        isBusy = false;
+
+        elements.pdfInput.disabled = false;
+
+        setActionButtonsDisabled(!previewsReady);
+        setPageControlsDisabled(false);
+    }
+});
+
+// ========================================
+// DOWNLOAD HELPERS
+// ========================================
+
+function getBaseFilename(filename) {
+    return filename.replace(/\.pdf$/i, '') || 'document';
+}
+
+function downloadBlob(blob, filename) {
+
     const url = URL.createObjectURL(blob);
 
     const link = document.createElement('a');
@@ -138,10 +474,11 @@ function downloadFile(blob, filename) {
     link.download = filename;
 
     document.body.appendChild(link);
+
     link.click();
     link.remove();
 
-    setTimeout(() => {
+    window.setTimeout(() => {
         URL.revokeObjectURL(url);
-    }, 1000);
+    }, 1500);
 }

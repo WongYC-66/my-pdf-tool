@@ -4,13 +4,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Split, reorder and remove PDF pages directly in your browser.">
 
-    <title>PDF Splitter</title>
+    <title>PDF Studio</title>
 
     <link rel="stylesheet" href="./css/style.css">
 
-    <!-- External libraries -->
-    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+    <!-- Browser-based PDF libraries. No backend required. -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Application -->
@@ -18,39 +20,217 @@
 </head>
 
 <body>
-    <main class="container">
-        <h1>PDF Splitter</h1>
+    <main class="app-shell">
 
-        <p class="subtitle">
-            Split your PDF into individual pages instantly.
-        </p>
+        <header class="app-header">
+            <p class="eyebrow">LOCAL PDF WORKSPACE</p>
 
-        <label class="upload-area" for="pdfInput">
-            <div class="icon">📄</div>
-            <p><strong>Click to upload a PDF</strong></p>
-            <p class="muted">PDF files only</p>
-        </label>
+            <h1>PDF Studio</h1>
 
-        <input
-            type="file"
-            id="pdfInput"
-            accept=".pdf,application/pdf"
+            <p class="subtitle">
+                Split pages into separate files, or rearrange and remove pages from a PDF.
+            </p>
+        </header>
+
+        <!-- PDF Upload -->
+        <section class="upload-card">
+
+            <label class="upload-area" for="pdfInput">
+                <span class="upload-icon">＋</span>
+
+                <span class="upload-title">
+                    Choose a PDF file
+                </span>
+
+                <span class="upload-help">
+                    Click to browse · PDF files only
+                </span>
+            </label>
+
+            <input
+                type="file"
+                id="pdfInput"
+                accept=".pdf,application/pdf"
+            >
+
+            <!-- Uploaded file information -->
+            <div class="file-info" id="fileInfo" hidden>
+
+                <div class="file-icon">PDF</div>
+
+                <div class="file-copy">
+                    <strong id="fileName"></strong>
+                    <span id="fileDetails"></span>
+                </div>
+
+                <span class="file-ready">Loaded</span>
+
+            </div>
+        </section>
+
+        <!-- Mode Tabs -->
+        <nav class="mode-tabs" role="tablist" aria-label="PDF tools">
+
+            <button
+                class="tab-button is-active"
+                id="splitTab"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="splitPanel"
+                disabled
+            >
+                <span class="tab-number">01</span>
+                Split PDF
+            </button>
+
+            <button
+                class="tab-button"
+                id="editTab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="editPanel"
+                disabled
+            >
+                <span class="tab-number">02</span>
+                Reorder / Delete
+            </button>
+
+        </nav>
+
+        <!-- ================================== -->
+        <!-- MODE 1: SPLIT PDF                  -->
+        <!-- ================================== -->
+
+        <section
+            class="tool-panel"
+            id="splitPanel"
+            role="tabpanel"
+            aria-labelledby="splitTab"
+            hidden
         >
 
-        <div class="file-info" id="fileInfo">
-            <strong id="fileName"></strong>
-            <span id="fileDetails"></span>
-        </div>
+            <div class="panel-heading">
 
-        <button id="splitBtn" disabled>
-            Split PDF & Download ZIP
-        </button>
+                <div>
+                    <p class="panel-kicker">MODE 01</p>
 
-        <div class="status" id="status"></div>
+                    <h2>Split into individual PDFs</h2>
 
-        <p class="privacy">
-            🔒 Your files never leave your browser.
+                    <p class="panel-description">
+                        Each page becomes its own PDF file.
+                        All files are packaged into one ZIP download.
+                    </p>
+                </div>
+
+                <span class="count-pill" id="splitPageCount">
+                    0 pages
+                </span>
+
+            </div>
+
+            <!-- Preview of every original page -->
+            <div
+                class="page-grid"
+                id="splitPageGrid"
+                aria-live="polite"
+            ></div>
+
+            <button
+                class="primary-button"
+                id="splitBtn"
+                type="button"
+                disabled
+            >
+                Split pages and download ZIP
+            </button>
+
+        </section>
+
+        <!-- ================================== -->
+        <!-- MODE 2: REORDER / DELETE           -->
+        <!-- ================================== -->
+
+        <section
+            class="tool-panel"
+            id="editPanel"
+            role="tabpanel"
+            aria-labelledby="editTab"
+            hidden
+        >
+
+            <div class="panel-heading">
+
+                <div>
+                    <p class="panel-kicker">MODE 02</p>
+
+                    <h2>Reorder or delete pages</h2>
+
+                    <p class="panel-description">
+                        Use the arrows to change the order,
+                        or remove pages you do not need.
+                    </p>
+                </div>
+
+                <span class="count-pill" id="editPageCount">
+                    0 pages
+                </span>
+
+            </div>
+
+            <div class="edit-toolbar">
+
+                <span class="toolbar-hint">
+                    The numbers show the new page order.
+                </span>
+
+                <button
+                    class="text-button"
+                    id="resetBtn"
+                    type="button"
+                    disabled
+                >
+                    Reset changes
+                </button>
+
+            </div>
+
+            <!-- Preview of editable pages -->
+            <div
+                class="page-grid"
+                id="editPageGrid"
+                aria-live="polite"
+            ></div>
+
+            <button
+                class="primary-button"
+                id="downloadEditedBtn"
+                type="button"
+                disabled
+            >
+                Download revised PDF
+            </button>
+
+        </section>
+
+        <!-- Status -->
+        <p
+            class="status"
+            id="status"
+            role="status"
+            aria-live="polite"
+        >
+            Upload a PDF to get started.
         </p>
+
+        <footer class="privacy-note">
+            <span>🔒</span>
+
+            Your PDF is processed locally in your browser.
+            It is not uploaded to a server.
+        </footer>
+
     </main>
 </body>
 </html>
