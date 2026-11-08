@@ -1,0 +1,56 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>PDF Splitter</title>
+
+    <link rel="stylesheet" href="./css/style.css">
+
+    <!-- External libraries -->
+    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <!-- Application -->
+    <script type="module" src="./js/main.js"></script>
+</head>
+
+<body>
+    <main class="container">
+        <h1>PDF Splitter</h1>
+
+        <p class="subtitle">
+            Split your PDF into individual pages instantly.
+        </p>
+
+        <label class="upload-area" for="pdfInput">
+            <div class="icon">📄</div>
+            <p><strong>Click to upload a PDF</strong></p>
+            <p class="muted">PDF files only</p>
+        </label>
+
+        <input
+            type="file"
+            id="pdfInput"
+            accept=".pdf,application/pdf"
+        >
+
+        <div class="file-info" id="fileInfo">
+            <strong id="fileName"></strong>
+            <span id="fileDetails"></span>
+        </div>
+
+        <button id="splitBtn" disabled>
+            Split PDF & Download ZIP
+        </button>
+
+        <div class="status" id="status"></div>
+
+        <p class="privacy">
+            🔒 Your files never leave your browser.
+        </p>
+    </main>
+</body>
+</html>
